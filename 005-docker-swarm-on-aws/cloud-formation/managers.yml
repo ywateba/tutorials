@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to deploy a Docker Swarm cluster with 3 master nodes, autoscaling worker nodes, EFS, and a load balancer.
+
+
+Resources:
+  Parameters:
+    InstanceType:
+      Type: String
+      Default: t3.medium
+    KeyName:
+      Type: AWS::EC2::KeyPair::KeyName
+      Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SwarmJoinTokenAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:GetParameter
+                Resource: "arn:aws:ssm:*:*:parameter/SwarmJoinToken"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2InstanceRole
+
+  LaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: ami-0c55b159cbfafe1f0  # Update with the latest AMI ID for your region
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroups:
+        - !Ref SecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          amazon-linux-extras install docker -y
+          systemctl start docker
+          systemctl enable docker
+          SWARM_JOIN_TOKEN=$(aws ssm get-parameter --name "SwarmJoinWorkerToken" --query "Parameter.Value" --output text)
+          docker swarm join --token $SWARM_JOIN_TOKEN SWARM_MANAGER_IP:2377
+          mkdir -p /mnt/efs
+          mount -t efs ${EFSFileSystem}:/mnt/efs
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+      LaunchConfigurationName: !Ref LaunchConfiguration
+      MinSize: 0
+      MaxSize: 7
+      DesiredCapacity: 0
+      Tags:
+        - Key: Name
+          Value: DockerSwarmWorker
+          PropagateAtLaunch: true
+
+  MasterInstance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroups:
+        - !Ref SecurityGroup
+      SubnetId: !Ref PrivateSubnet1
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          amazon-linux-extras install docker -y
+          systemctl start docker
+          systemctl enable docker
+          docker swarm init --advertise-addr $(curl http://169.254.169.254/latest/meta-data/local-ipv4)
+          SWARM_JOIN_WORKERTOKEN=$(docker swarm join-token -q worker)
+          SWARM_JOIN_MANAGER_TOKEN=$(docker swarm join-token -q manager)
+          aws ssm put-parameter --name "SwarmJoinManagerToken" --type "String" --value "$SWARM_JOIN_MANAGER_TOKEN" --overwrite
+          aws ssm put-parameter --name "SwarmJoinWorkerToken" --type "String" --value "$SWARM_JOIN_WORKER_TOKEN" --overwrite
+          mkdir -p /mnt/efs
+          mount -t efs ${EFSFileSystem}:/mnt/efs
+
+  MasterInstance2:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroups:
+        - !Ref SecurityGroup
+      SubnetId: !Ref PrivateSubnet2
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          amazon-linux-extras install docker -y
+          systemctl start docker
+          systemctl enable docker
+          SWARM_JOIN_TOKEN=$(aws ssm get-parameter --name "SwarmJoinManagerToken" --query "Parameter.Value" --output text)
+          docker swarm join --token $SWARM_JOIN_TOKEN SWARM_MANAGER_IP:2377
+          mkdir -p /mnt/efs
+          mount -t efs ${EFSFileSystem}:/mnt/efs
+
+  MasterInstance3:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroups:
+        - !Ref SecurityGroup
+      SubnetId: !Ref PrivateSubnet3
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          amazon-linux-extras install docker -y
+          systemctl start docker
+          systemctl enable docker
+          SWARM_JOIN_TOKEN=$(aws ssm get-parameter --name "SwarmJoinManagerToken" --query "Parameter.Value" --output text)
+          docker swarm join --token $SWARM_JOIN_TOKEN SWARM_MANAGER_IP:2377
+          mkdir -p /mnt/efs
+          mount -t efs ${EFSFileSystem}:/mnt/efs
