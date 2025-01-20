@@ -1,0 +1,26 @@
+
+services:
+  db:
+    image: mysql:8.0.39
+    container_name: db
+    environment:
+      MYSQL_ROOT_PASSWORD: "password"
+
+    ports:
+      - 3306:3306
+    networks:
+      - db_network
+    volumes:
+      - db_data:/var/lib/mysql
+
+
+networks:
+  db_network:
+    name: db_network
+
+volumes:
+  db_data:
+    name: db_data
+
+
+
